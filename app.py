@@ -57,27 +57,35 @@ def get_or_create_filer(session, cik: str):
 
 def ingest_latest_two_13f(session, cik: str):
     filer = get_or_create_filer(session, cik)
+
     company = Company(cik)
-    filings = company.get_filings(form="13F-HR")
+    filings = company.get_filings(form="13F-HR")  # returns EntityFiling objects [web:120][web:122]
     filings = filings.head(2)
+
     stored = []
-    for f in filings:
-        meta = f.metadata
-        accession_no = meta.accession_number
+    for filing_obj in filings:
+        # EntityFiling has these properties directly [web:117][web:120]
+        accession_no = filing_obj.accession_no
+        filing_date = filing_obj.filing_date
+        report_date = filing_obj.report_date
+
         existing = session.query(Filing).filter_by(accession_no=accession_no).one_or_none()
         if existing:
             stored.append(existing)
             continue
-        thirteen_f = f.obj()
+
+        thirteen_f = filing_obj.obj()  # ThirteenF data object [web:36]
+
         filing = Filing(
             filer_id=filer.id,
             accession_no=accession_no,
-            period_end=thirteen_f.report_date,
-            filed_at=meta.filing_date,
+            period_end=report_date,
+            filed_at=filing_date,
         )
         session.add(filing)
         session.flush()
-        for row in thirteen_f.infotable:
+
+        for row in thirteen_f.infotable:  # holdings from 13F [web:36]
             h = Holding(
                 filing_id=filing.id,
                 cusip=row.cusip,
@@ -87,9 +95,12 @@ def ingest_latest_two_13f(session, cik: str):
                 market_value=row.value,
             )
             session.add(h)
+
         stored.append(filing)
+
     session.commit()
     return sorted(stored, key=lambda x: x.period_end, reverse=True)[:2]
+
 
 def get_last_two_filings(session, filer_id: int):
     return (

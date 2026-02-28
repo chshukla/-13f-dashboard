@@ -7,6 +7,7 @@ import pandas as pd
 # ---------- DB setup ----------
 Base = declarative_base()
 DATABASE_URL = "sqlite:///./13f.db"
+set_identity("shuklach@outlook.com")
 engine = create_engine(DATABASE_URL, future=True)
 SessionLocal = sessionmaker(bind=engine)
 

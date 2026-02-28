@@ -289,24 +289,24 @@ if st.button("🔍 Load 13F Activity", use_container_width=True):
                         with tab1:
                             df = filter_df(activity["new_buys"])
                             st.metric("Total New Buys", len(df))
-                            st.dataframe(df.sort_values("New Value ($)", ascending=False), use_container_width=True)
+                            st.dataframe(df.sort_values("New Value ($)", ascending=False) if "New Value ($)" in df.columns else df, use_container_width=True)
                             if not df.empty:
                                 st.bar_chart(df.set_index("Instrument")["New Value ($)"].head(10))
 
                         with tab2:
                             df = filter_df(activity["increases"])
                             st.metric("Total Increases", len(df))
-                            st.dataframe(df.sort_values("New Value ($)", ascending=False), use_container_width=True)
+                            st.dataframe(df.sort_values("New Value ($)", ascending=False) if "New Value ($)" in df.columns else df, use_container_width=True)
 
                         with tab3:
                             df = filter_df(activity["decreases"])
                             st.metric("Total Decreases", len(df))
-                            st.dataframe(df.sort_values("Prev Value ($)", ascending=False), use_container_width=True)
+                            st.dataframe(df.sort_values("Prev Value ($)", ascending=False) if "Prev Value ($)" in df.columns else df, use_container_width=True)
 
                         with tab4:
                             df = filter_df(activity["exits"])
                             st.metric("Total Exits", len(df))
-                            st.dataframe(df.sort_values("Prev Value ($)", ascending=False), use_container_width=True)
+                            st.dataframe(df.sort_values("Prev Value ($)", ascending=False) if "Prev Value ($)" in df.columns else df, use_container_width=True)
 
             except Exception as e:
                 st.error(f"Error fetching data: {e}")

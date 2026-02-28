@@ -49,9 +49,9 @@ class Holding(Base):
 Base.metadata.create_all(engine)
 
 
-# ---------- Utility: ensure Python date object ----------
+# ---------- Utility ----------
 def to_date(val):
-    """Convert string, datetime, or date to Python date."""
+    """Convert string, datetime, or date to Python date object."""
     if val is None:
         return None
     if isinstance(val, date):
@@ -90,8 +90,8 @@ def ingest_latest_two_13f(session, cik: str):
 
     for filing_obj in filings:
         accession_no = filing_obj.accession_no
-        filing_date  = to_date(filing_obj.filing_date)   # ensure date
-        report_date  = to_date(filing_obj.report_date)   # ensure date
+        filing_date  = to_date(filing_obj.filing_date)
+        report_date  = to_date(filing_obj.report_date)
 
         existing = session.query(Filing).filter_by(accession_no=accession_no).one_or_none()
         if existing:
@@ -99,6 +99,8 @@ def ingest_latest_two_13f(session, cik: str):
             continue
 
         thirteen_f = filing_obj.obj()
+        if thirteen_f is None:
+            continue
 
         filing = Filing(
             filer_id=filer.id,
@@ -109,14 +111,33 @@ def ingest_latest_two_13f(session, cik: str):
         session.add(filing)
         session.flush()
 
-        for row in thirteen_f.infotable:
+        # infotable is a DataFrame in current edgartools versions
+        # columns: name, cusip, ticker, value, shares, type, etc.
+        infotable = thirteen_f.infotable
+        if hasattr(infotable, "to_dataframe"):
+            df = infotable.to_dataframe()
+        elif hasattr(infotable, "itertuples"):
+            df = infotable  # already a DataFrame
+        else:
+            df = pd.DataFrame(infotable)
+
+        # Normalise column names to lowercase
+        df.columns = [c.lower() for c in df.columns]
+
+        for row in df.itertuples(index=False):
+            cusip        = getattr(row, "cusip",  None)
+            ticker       = getattr(row, "ticker", None)
+            issuer_name  = getattr(row, "name",   None)
+            shares       = getattr(row, "shares", None) or getattr(row, "sshprnamt", None)
+            market_value = getattr(row, "value",  None)
+
             h = Holding(
                 filing_id=filing.id,
-                cusip=row.cusip,
-                ticker=row.ticker,
-                issuer_name=row.name_of_issuer,
-                shares=row.shrs_or_prn_amt.ssh_prnamt,
-                market_value=row.value,
+                cusip=str(cusip) if cusip else None,
+                ticker=str(ticker) if ticker else None,
+                issuer_name=str(issuer_name) if issuer_name else None,
+                shares=float(shares) if shares else None,
+                market_value=float(market_value) if market_value else None,
             )
             session.add(h)
 

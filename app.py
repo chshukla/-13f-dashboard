@@ -3,8 +3,9 @@ from sqlalchemy import create_engine, Column, Integer, String, Date, Numeric, Fo
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from edgar import Company, set_identity
 import pandas as pd
+from datetime import date, datetime
 
-# SEC EDGAR requires a User-Agent identity (name/email). [web:104][web:110][web:113]
+# SEC EDGAR requires a User-Agent identity
 set_identity("Chandra Shukla shuklach@outlook.com")
 
 # ---------- DB setup (SQLite) ----------
@@ -29,7 +30,6 @@ class Filing(Base):
     accession_no = Column(String(50), unique=True, nullable=False)
     period_end = Column(Date, nullable=False)
     filed_at = Column(Date, nullable=False)
-
     filer = relationship("Filer", back_populates="filings")
     holdings = relationship("Holding", back_populates="filing")
 
@@ -43,11 +43,24 @@ class Holding(Base):
     issuer_name = Column(String)
     shares = Column(Numeric)
     market_value = Column(Numeric)
-
     filing = relationship("Filing", back_populates="holdings")
 
 
 Base.metadata.create_all(engine)
+
+
+# ---------- Utility: ensure Python date object ----------
+def to_date(val):
+    """Convert string, datetime, or date to Python date."""
+    if val is None:
+        return None
+    if isinstance(val, date):
+        return val
+    if isinstance(val, datetime):
+        return val.date()
+    if isinstance(val, str):
+        return datetime.strptime(val[:10], "%Y-%m-%d").date()
+    return val
 
 
 # ---------- Helper functions ----------
@@ -59,7 +72,7 @@ def get_or_create_filer(session, cik: str):
     filer = session.query(Filer).filter_by(cik=cik).one_or_none()
     if filer:
         return filer
-    company = Company(cik)  # pulls metadata from EDGAR [web:113][web:116]
+    company = Company(cik)
     filer = Filer(cik=cik, name=company.name)
     session.add(filer)
     session.commit()
@@ -67,31 +80,25 @@ def get_or_create_filer(session, cik: str):
 
 
 def ingest_latest_two_13f(session, cik: str):
-    """Fetch and store the last two 13F-HR filings for a CIK."""
     filer = get_or_create_filer(session, cik)
 
     company = Company(cik)
-    filings = company.get_filings(form="13F-HR")  # EntityFiling objects [web:117][web:120][web:122]
+    filings = company.get_filings(form="13F-HR")
     filings = filings.head(2)
 
     stored = []
 
     for filing_obj in filings:
-        # EntityFiling exposes these directly (no .metadata) [web:117][web:120]
         accession_no = filing_obj.accession_no
-        filing_date = filing_obj.filing_date
-        report_date = filing_obj.report_date
+        filing_date  = to_date(filing_obj.filing_date)   # ensure date
+        report_date  = to_date(filing_obj.report_date)   # ensure date
 
-        existing = (
-            session.query(Filing)
-            .filter_by(accession_no=accession_no)
-            .one_or_none()
-        )
+        existing = session.query(Filing).filter_by(accession_no=accession_no).one_or_none()
         if existing:
             stored.append(existing)
             continue
 
-        thirteen_f = filing_obj.obj()  # ThirteenF object with infotable [web:36]
+        thirteen_f = filing_obj.obj()
 
         filing = Filing(
             filer_id=filer.id,
@@ -102,7 +109,6 @@ def ingest_latest_two_13f(session, cik: str):
         session.add(filing)
         session.flush()
 
-        # 13F information table rows [web:36]
         for row in thirteen_f.infotable:
             h = Holding(
                 filing_id=filing.id,
@@ -141,14 +147,14 @@ def get_holdings_map(session, filing_id: int):
     return m
 
 
-def compute_activity(session, filer: Filer):
+def compute_activity(session, filer):
     filings = get_last_two_filings(session, filer.id)
     if len(filings) < 2:
         return None
 
     latest, prev = filings[0], filings[1]
     latest_h = get_holdings_map(session, latest.id)
-    prev_h = get_holdings_map(session, prev.id)
+    prev_h   = get_holdings_map(session, prev.id)
 
     new_buys, increases, decreases, exits = [], [], [], []
 
@@ -158,37 +164,24 @@ def compute_activity(session, filer: Filer):
         p = prev_h.get(key)
 
         if l and not p:
-            new_buys.append(
-                {
-                    "Instrument": key,
-                    "Issuer": l.issuer_name,
-                    "Prev Shares": 0,
-                    "New Shares": float(l.shares or 0),
-                    "Prev Value ($)": 0,
-                    "New Value ($)": float(l.market_value or 0),
-                }
-            )
+            new_buys.append({
+                "Instrument": key, "Issuer": l.issuer_name,
+                "Prev Shares": 0, "New Shares": float(l.shares or 0),
+                "Prev Value ($)": 0, "New Value ($)": float(l.market_value or 0),
+            })
         elif p and not l:
-            exits.append(
-                {
-                    "Instrument": key,
-                    "Issuer": p.issuer_name,
-                    "Prev Shares": float(p.shares or 0),
-                    "New Shares": 0,
-                    "Prev Value ($)": float(p.market_value or 0),
-                    "New Value ($)": 0,
-                }
-            )
+            exits.append({
+                "Instrument": key, "Issuer": p.issuer_name,
+                "Prev Shares": float(p.shares or 0), "New Shares": 0,
+                "Prev Value ($)": float(p.market_value or 0), "New Value ($)": 0,
+            })
         elif l and p:
             ls, ps = float(l.shares or 0), float(p.shares or 0)
             lv, pv = float(l.market_value or 0), float(p.market_value or 0)
             row = {
-                "Instrument": key,
-                "Issuer": l.issuer_name,
-                "Prev Shares": ps,
-                "New Shares": ls,
-                "Prev Value ($)": pv,
-                "New Value ($)": lv,
+                "Instrument": key, "Issuer": l.issuer_name,
+                "Prev Shares": ps, "New Shares": ls,
+                "Prev Value ($)": pv, "New Value ($)": lv,
             }
             if ls > ps:
                 increases.append(row)
@@ -197,28 +190,25 @@ def compute_activity(session, filer: Filer):
 
     return {
         "latest_period": latest.period_end,
-        "prev_period": prev.period_end,
-        "new_buys": pd.DataFrame(new_buys),
-        "increases": pd.DataFrame(increases),
-        "decreases": pd.DataFrame(decreases),
-        "exits": pd.DataFrame(exits),
+        "prev_period":   prev.period_end,
+        "new_buys":   pd.DataFrame(new_buys),
+        "increases":  pd.DataFrame(increases),
+        "decreases":  pd.DataFrame(decreases),
+        "exits":      pd.DataFrame(exits),
     }
 
 
 # ---------- Streamlit UI ----------
 st.set_page_config(page_title="13F Activity Dashboard", layout="wide")
 
-st.markdown(
-    """
+st.markdown("""
     <style>
     .main { background-color: #0e1117; }
     h1 { color: #00d4ff; }
     h2, h3 { color: #ffffff; }
     .stTabs [data-baseweb="tab"] { color: #ffffff; font-weight: bold; }
     </style>
-""",
-    unsafe_allow_html=True,
-)
+""", unsafe_allow_html=True)
 
 st.title("📊 13F Recent Buys & Sells Dashboard")
 st.caption("Powered by SEC EDGAR | Family Office & Institutional Holdings")
@@ -234,13 +224,9 @@ PRESET_FUNDS = {
 
 col1, col2 = st.columns([2, 1])
 with col1:
-    selected = st.selectbox(
-        "Select a fund or enter custom CIK", list(PRESET_FUNDS.keys())
-    )
+    selected = st.selectbox("Select a fund or enter custom CIK", list(PRESET_FUNDS.keys()))
 with col2:
-    min_value = st.number_input(
-        "Min position value ($)", min_value=0, value=0, step=100000
-    )
+    min_value = st.number_input("Min position value ($)", min_value=0, value=0, step=100000)
 
 if PRESET_FUNDS[selected] == "custom":
     cik = st.text_input("Enter CIK manually", value="")
@@ -275,45 +261,32 @@ if st.button("🔍 Load 13F Activity", use_container_width=True):
                                 return df
                             return df[df["New Value ($)"] >= min_value]
 
-                        tab1, tab2, tab3, tab4 = st.tabs(
-                            ["🟢 New Buys", "🔼 Increases", "🔽 Decreases", "🔴 Exits"]
-                        )
+                        tab1, tab2, tab3, tab4 = st.tabs([
+                            "🟢 New Buys", "🔼 Increases", "🔽 Decreases", "🔴 Exits"
+                        ])
 
                         with tab1:
                             df = filter_df(activity["new_buys"])
                             st.metric("Total New Buys", len(df))
-                            st.dataframe(
-                                df.sort_values("New Value ($)", ascending=False),
-                                use_container_width=True,
-                            )
+                            st.dataframe(df.sort_values("New Value ($)", ascending=False), use_container_width=True)
                             if not df.empty:
-                                st.bar_chart(
-                                    df.set_index("Instrument")["New Value ($)"].head(10)
-                                )
+                                st.bar_chart(df.set_index("Instrument")["New Value ($)"].head(10))
 
                         with tab2:
                             df = filter_df(activity["increases"])
                             st.metric("Total Increases", len(df))
-                            st.dataframe(
-                                df.sort_values("New Value ($)", ascending=False),
-                                use_container_width=True,
-                            )
+                            st.dataframe(df.sort_values("New Value ($)", ascending=False), use_container_width=True)
 
                         with tab3:
                             df = filter_df(activity["decreases"])
                             st.metric("Total Decreases", len(df))
-                            st.dataframe(
-                                df.sort_values("Prev Value ($)", ascending=False),
-                                use_container_width=True,
-                            )
+                            st.dataframe(df.sort_values("Prev Value ($)", ascending=False), use_container_width=True)
 
                         with tab4:
                             df = filter_df(activity["exits"])
                             st.metric("Total Exits", len(df))
-                            st.dataframe(
-                                df.sort_values("Prev Value ($)", ascending=False),
-                                use_container_width=True,
-                            )
+                            st.dataframe(df.sort_values("Prev Value ($)", ascending=False), use_container_width=True)
+
             except Exception as e:
                 st.error(f"Error fetching data: {e}")
             finally:

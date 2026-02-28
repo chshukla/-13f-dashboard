@@ -1,7 +1,7 @@
 import streamlit as st
 from sqlalchemy import create_engine, Column, Integer, String, Date, Numeric, ForeignKey
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
-from edgar import Company
+from edgar import Company, set_identity
 import pandas as pd
 
 # ---------- DB setup ----------
